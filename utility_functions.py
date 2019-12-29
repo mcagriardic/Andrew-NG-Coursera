@@ -6,11 +6,12 @@ import matplotlib.pyplot as plt
 EPSILON = 10e-10 # to silence the RuntimeWarning: divide by zero encountered errors
 
 
-def sigmoid(z):
-    return(1 / (1 + np.exp(-z)))
-
-
 def calculate_model_performance(actual, predicted):
+    # http://www.academicos.ccadet.unam.mx/jorge.marquez/cursos/Instrumentacion/FalsePositive_TrueNegative_etc.pdf
+    # https://www.lexjansen.com/nesug/nesug10/hl/hl07.pdf
+    # https://towardsdatascience.com/beyond-accuracy-precision-and-recall-3da06bea9f6c
+    # https://towardsdatascience.com/data-science-performance-metrics-for-everyone-4d68f4859eef
+
     TP = 0; TN = 0; FP = 0; FN = 0
 
     for act, pred in zip(actual, predicted):
@@ -46,11 +47,11 @@ def calculate_model_performance(actual, predicted):
             ))
 
     model_metrics = {
-        "specificty": specificity(),
-        "sensitivity/recall": sensitivity_recall(),
+        "specificity": specificity(),
         "accuracy": accuracy(),
         "prevalence": prevalence(),
         "precision": precision(),
+        "sensitivity/recall": sensitivity_recall(),
         "F1": F1(),
         "false_positive_rate": false_positive()
     }
@@ -58,7 +59,6 @@ def calculate_model_performance(actual, predicted):
 
 
 def calculate_TP_FP(actual, func_to_predict, threshold_spacing):
-
     true_positive_rate = []
     false_positive_rate = []
     for threshold in np.linspace(0, 1, threshold_spacing):
@@ -67,6 +67,54 @@ def calculate_TP_FP(actual, func_to_predict, threshold_spacing):
         false_positive_rate.append(model_metrics["false_positive_rate"])
 
     return true_positive_rate, false_positive_rate
+
+
+def one_hot_encode(y):
+    """Convert an iterable of indices to one-hot encoded labels."""
+    y = y.flatten() # Sometimes not flattened vector is passed e.g (118,1) in these cases
+    # the function ends up creating a tensor e.g. (118, 2, 1). flatten removes this issue
+    nb_classes = len(np.unique(y)) # get the number of unique classes
+    standardised_labels = dict(zip(np.unique(y), np.arange(nb_classes))) # get the class labels as a dictionary
+    # which then is standardised. E.g imagine class labels are (4,7,9) if a vector of y containing 4,7 and 9 is
+    # directly passed then np.eye(nb_classes)[4] or 7,9 throws an out of index error.
+    # standardised labels fixes this issue by returning a dictionary;
+    # standardised_labels = {4:0, 7:1, 9:2}. The values of the dictionary are mapped to keys in y array.
+    # standardised_labels also removes the error that is raised if the labels are floats. E.g. 1.0; element
+    # cannot be called by a float index e.g y[1.0] - throws an index error.
+    targets = np.vectorize(standardised_labels.get)(y) # map the dictionary values to array.
+    return np.eye(nb_classes)[targets]
+
+
+class FractionError(Exception):
+    pass
+
+
+def split_data_as(X, y, **kwargs):
+    args_passed = list(kwargs.keys())
+    split_ratios = kwargs.values()
+    if not np.isclose(sum(split_ratios), 1):
+        raise FractionError("Passed fractions add up to %.3f! The fractions should add up to 1!" %sum(split_ratios))
+    print("Splitting the dataset as %s..." %(', '.join(args_passed[:-1]) + ' and ' + args_passed[-1]))
+    
+    dataset = np.c_[X,y]
+    shuffled = np.arange(len(dataset))
+    np.random.shuffle(shuffled)
+    dataset_shuffled = dataset[shuffled]
+    
+    if len(args_passed) == 3:
+        arg_1, arg_2, arg_3 = np.split(
+            dataset_shuffled,
+            [int(kwargs[args_passed[0]] * len(dataset_shuffled)),
+             int((kwargs[args_passed[0]] + kwargs[args_passed[1]]) * len(dataset_shuffled))]
+        )
+        return arg_1, arg_2, arg_3
+
+    elif len(args_passed) == 2:       
+        arg_1, arg_2 = np.split(
+            dataset_shuffled,
+            [int(kwargs[args_passed[0]] * len(dataset_shuffled))]
+        )
+        return arg_1, arg_2
 
 
 # **************************************** PLOTTING *******************************************************************
