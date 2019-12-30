@@ -83,7 +83,7 @@ class FractionError(Exception):
 
 
 def random_shuffle(X, y):
-    dataset = np.c_[X,y]
+    dataset = np.c_[X,y.reshape(-1, 1)]
     shuffled = np.arange(len(dataset))
     np.random.shuffle(shuffled)
     return dataset[shuffled]
