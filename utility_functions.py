@@ -1,6 +1,7 @@
 import numpy as np
 from scipy.optimize import minimize
 import matplotlib.pyplot as plt
+from itertools import product
 
 
 EPSILON = 10e-10 # to silence the RuntimeWarning: divide by zero encountered errors
@@ -82,8 +83,8 @@ class FractionError(Exception):
     pass
 
 
-def random_shuffle(X, y):
-    dataset = np.c_[X,y.reshape(-1, 1)]
+def shuffle(X, y):
+    dataset = np.c_[X,y]
     shuffled = np.arange(len(dataset))
     np.random.shuffle(shuffled)
     return dataset[shuffled]
@@ -96,7 +97,7 @@ def split_data_as(X, y, **kwargs):
         raise FractionError("Passed fractions add up to %.3f! The fractions should add up to 1!" %sum(split_ratios))
     print("Splitting the dataset as %s..." %(', '.join(args_passed[:-1]) + ' and ' + args_passed[-1]))
 
-    dataset_shuffled = random_shuffle(X, y)
+    dataset_shuffled = shuffle(X, y)
 
     if len(args_passed) == 3:
         arg_1, arg_2, arg_3 = np.split(
@@ -112,6 +113,73 @@ def split_data_as(X, y, **kwargs):
             [int(kwargs[args_passed[0]] * len(dataset_shuffled))]
         )
         return arg_1, arg_2
+
+
+def param_grid(param_grid_dict):
+    keys = param_grid_dict.keys()
+    for element in product(*param_grid_dict.values()):
+        yield dict(zip(keys, element))
+
+
+def grid_search(X, y, clf, metric, n_fold=3, verbose=True, **kwargs):
+    # X and y are in the shape of (no_of_features, no_of_training_examples)
+    split_indices = np.int_(np.linspace(len(X)/n_fold, len(X), num=n_fold))
+    dataset_shuffled = shuffle(X, y)
+
+    splitted = np.array(
+        np.split(
+            dataset_shuffled,
+            split_indices
+        )[:-1]
+    )
+
+    models = {}
+    results_dict_all_models = {}
+    results_average_dict = {}
+
+    grid = param_grid(kwargs['param_grid_dict'])
+    grid_len = param_grid(kwargs['param_grid_dict'])
+    n_to_run = len(list(grid_len)) * n_fold
+    count = 1
+    for index_model, params in enumerate(grid):
+        models["model_" + str(index_model + 1)] = clf(**params)
+        results_dict = {}
+
+        for index_fold in range(n_fold):
+            if verbose:
+                print("\n*********{}/{}*********".format(count ,n_to_run))
+                print(
+                    "Running model {0} fold {1}".format(
+                    str(index_model + 1),
+                    str(index_fold + 1)
+                    )
+                )
+            arrays_to_be_joined = np.delete(splitted, index_fold, axis = 0)
+            dataset_train = np.concatenate(arrays_to_be_joined)
+            dataset_test = splitted[index_fold]
+
+            x_train = dataset_train[:, :-1].T
+            y_train = one_hot_encode(dataset_train[:, -1]).T
+
+            models["model_" + str(index_model + 1)].fit(x_train, y_train)
+
+            x_test = dataset_test[:, :-1].T
+            y_test = one_hot_encode(dataset_test[:, -1]).T
+
+            results_dict["model_" + str(index_model + 1) + "_fold_" + str(index_fold + 1)] = \
+            calculate_model_performance(
+                np.argmax(y_test, axis=0),
+                models["model_" + str(index_model + 1)].predict(x_test)
+            )[metric]
+            count += 1
+
+        results_dict_all_models[index_model + 1] = results_dict
+
+        vals = np.fromiter(results_dict.values(), dtype=float)
+        results_average_dict["model_" + str(index_model + 1)] = np.average(vals)
+
+    results_average_dict = sorted(results_average_dict.items(), key=lambda x: x[1], reverse=True)
+    return results_dict_all_models, results_average_dict, models
 
 
 # **************************************** PLOTTING *******************************************************************
