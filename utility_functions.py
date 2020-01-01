@@ -115,36 +115,83 @@ def split_data_as(X, y, **kwargs):
         return arg_1, arg_2
 
 
+def metrics_averaged_and_sorted(model_metrics, metrics, sort_by=None):
+
+    # by default sort by the first metric passed
+    if not sort_by:
+        sort_by = metrics[0]
+
+    # if single metric is passed to metrics e.g. "accuracy"
+    if not isinstance(metrics, list):
+        index_sort = 1
+        metrics = [metrics]
+    else:
+        index_sort = metrics.index(sort_by)
+
+    results_average_dict = {}
+    for metric in metrics:
+        for model in model_metrics:
+            retrieve_metric = {}
+            for fold in model_metrics[model]:
+                retrieve_metric[model + "_" + fold] = model_metrics[model][fold][metric]
+            
+            vals = np.fromiter(retrieve_metric.values(), dtype=float)
+            try:
+                results_average_dict[model] = results_average_dict[model], (metric, np.average(vals))
+            except KeyError:
+                results_average_dict[model] = metric, np.average(vals)
+                
+    return sorted(results_average_dict.items(), key=lambda x: x[1][index_sort], reverse=True)
+
+
 def param_grid(param_grid_dict):
     keys = param_grid_dict.keys()
     for element in product(*param_grid_dict.values()):
         yield dict(zip(keys, element))
 
 
-def grid_search(X, y, clf, metric, n_fold=3, verbose=True, **kwargs):
-    # X and y are in the shape of (no_of_features, no_of_training_examples)
-    split_indices = np.int_(np.linspace(len(X)/n_fold, len(X), num=n_fold))
+def grid_search_stratified(X, y, clf, metrics, sort_by=None, n_fold=3, verbose=True, **kwargs):
+    # X and y are in the shape of (no_of_training_examples, no_of_features)
     dataset_shuffled = shuffle(X, y)
+    classes, counts = np.unique(y, return_counts=True)
+    classes = np.int_(classes)
+    counts_perc = counts / y.shape[0]
 
-    splitted = np.array(
-        np.split(
-            dataset_shuffled,
-            split_indices
-        )[:-1]
-    )
+    classes_holder_dict = {}
+    for class_ in classes:
+        classes_holder_dict[class_] = dataset_shuffled[dataset_shuffled[:, -1] == class_]
+
+    fold_size = y.shape[0] / n_fold
+
+    train_dataset = {}
+    array_training = np.empty_like(classes, dtype=object)
+    test_dataset = {}
+    array_test = np.empty_like(classes, dtype=object)
+    for fold in range(n_fold):
+        for class_ in classes:
+            grab = np.int(fold_size * counts_perc[class_])
+            array_test[class_] = classes_holder_dict[class_][fold * grab:(fold + 1) * grab ,:]
+            array_training[class_] = np.delete(
+                classes_holder_dict[class_],
+                (range(fold * grab, (fold + 1) * grab)),
+                axis=0
+            )
+            
+        train_dataset[fold] = np.concatenate(array_training)
+        test_dataset[fold] = np.concatenate(array_test)
 
     models = {}
     results_dict_all_models = {}
-    results_average_dict = {}
+
+    grid_len= param_grid(kwargs['param_grid_dict'])
+    n_to_run = len(list(grid_len)) * n_fold
 
     grid = param_grid(kwargs['param_grid_dict'])
-    grid_len = param_grid(kwargs['param_grid_dict'])
-    n_to_run = len(list(grid_len)) * n_fold
     count = 1
     for index_model, params in enumerate(grid):
         models["model_" + str(index_model + 1)] = clf(**params)
-        results_dict = {}
 
+        results_dict = {}
         for index_fold in range(n_fold):
             if verbose:
                 print("\n*********{}/{}*********".format(count ,n_to_run))
@@ -154,31 +201,27 @@ def grid_search(X, y, clf, metric, n_fold=3, verbose=True, **kwargs):
                     str(index_fold + 1)
                     )
                 )
-            arrays_to_be_joined = np.delete(splitted, index_fold, axis = 0)
-            dataset_train = np.concatenate(arrays_to_be_joined)
-            dataset_test = splitted[index_fold]
 
-            x_train = dataset_train[:, :-1].T
-            y_train = one_hot_encode(dataset_train[:, -1]).T
+            x_train = train_dataset[fold][:, :-1].T
+            y_train = one_hot_encode(train_dataset[fold][:, -1]).T
+
+            x_test = test_dataset[fold][:, :-1].T
+            y_test = one_hot_encode(test_dataset[fold][:, -1]).T
 
             models["model_" + str(index_model + 1)].fit(x_train, y_train)
 
-            x_test = dataset_test[:, :-1].T
-            y_test = one_hot_encode(dataset_test[:, -1]).T
-
-            results_dict["model_" + str(index_model + 1) + "_fold_" + str(index_fold + 1)] = \
+            results_dict["fold_" + str(index_fold + 1)] = \
             calculate_model_performance(
                 np.argmax(y_test, axis=0),
                 models["model_" + str(index_model + 1)].predict(x_test)
-            )[metric]
+            )
             count += 1
 
-        results_dict_all_models[index_model + 1] = results_dict
+        results_dict_all_models["model_" + str(index_model + 1)] = results_dict
+        results_average_dict = metrics_averaged_and_sorted(results_dict_all_models,
+                                                           metrics,
+                                                           sort_by)
 
-        vals = np.fromiter(results_dict.values(), dtype=float)
-        results_average_dict["model_" + str(index_model + 1)] = np.average(vals)
-
-    results_average_dict = sorted(results_average_dict.items(), key=lambda x: x[1], reverse=True)
     return results_dict_all_models, results_average_dict, models
 
 
