@@ -37,10 +37,10 @@ def calculate_model_performance(actual, predicted):
 
     def precision():
         return TP / (TP + FP + EPSILON) * 100
-    
+
     def false_positive():
         return FP / (FP + TN + EPSILON) * 100
-    
+
     def F1():
         return (2 * (
                 (precision() * sensitivity_recall())
@@ -83,7 +83,7 @@ class FractionError(Exception):
     pass
 
 
-def shuffle(X, y):
+def shuffled(X, y):
     dataset = np.c_[X,y]
     shuffled = np.arange(len(dataset))
     np.random.shuffle(shuffled)
@@ -97,7 +97,7 @@ def split_data_as(X, y, **kwargs):
         raise FractionError("Passed fractions add up to %.3f! The fractions should add up to 1!" %sum(split_ratios))
     print("Splitting the dataset as %s..." %(', '.join(args_passed[:-1]) + ' and ' + args_passed[-1]))
 
-    dataset_shuffled = shuffle(X, y)
+    dataset_shuffled = shuffled(X, y)
 
     if len(args_passed) == 3:
         arg_1, arg_2, arg_3 = np.split(
@@ -115,114 +115,171 @@ def split_data_as(X, y, **kwargs):
         return arg_1, arg_2
 
 
-def metrics_averaged_and_sorted(model_metrics, metrics, sort_by=None):
-
-    # by default sort by the first metric passed
-    if not sort_by:
-        sort_by = metrics[0]
-
-    # if single metric is passed to metrics e.g. "accuracy"
-    if not isinstance(metrics, list):
-        index_sort = 1
-        metrics = [metrics]
-    else:
-        index_sort = metrics.index(sort_by)
-
-    results_average_dict = {}
-    for metric in metrics:
-        for model in model_metrics:
-            retrieve_metric = {}
-            for fold in model_metrics[model]:
-                retrieve_metric[model + "_" + fold] = model_metrics[model][fold][metric]
-            
-            vals = np.fromiter(retrieve_metric.values(), dtype=float)
-            try:
-                results_average_dict[model] = results_average_dict[model], (metric, np.average(vals))
-            except KeyError:
-                results_average_dict[model] = metric, np.average(vals)
-                
-    return sorted(results_average_dict.items(), key=lambda x: x[1][index_sort], reverse=True)
-
-
-def param_grid(param_grid_dict):
-    keys = param_grid_dict.keys()
-    for element in product(*param_grid_dict.values()):
+def param_grid(dict_param_grid):
+    keys = dict_param_grid.keys()
+    for element in product(*dict_param_grid.values()):
         yield dict(zip(keys, element))
 
 
-def grid_search_stratified(X, y, clf, metrics, sort_by=None, n_fold=3, verbose=True, **kwargs):
-    # X and y are in the shape of (no_of_training_examples, no_of_features)
-    dataset_shuffled = shuffle(X, y)
-    classes, counts = np.unique(y, return_counts=True)
-    classes = np.int_(classes)
-    counts_perc = counts / y.shape[0]
+def make_n_folds(x, y, n_folds=3, shuffle=True, stratify=True):
+    if shuffle:
+        ary_dataset = shuffled(x, y)
+    else:
+        ary_dataset = np.c_[x, y]
 
-    classes_holder_dict = {}
-    for class_ in classes:
-        classes_holder_dict[class_] = dataset_shuffled[dataset_shuffled[:, -1] == class_]
+    ary_classes, ary_counts = np.unique(y, return_counts=True)
+    ary_classes = np.int_(ary_classes)
+    ary_counts_perc = ary_counts / y.shape[0]
+    fold_size = y.shape[0] / n_folds
 
-    fold_size = y.shape[0] / n_fold
+    dict_class_holder = {}
+    for class_ in ary_classes:
+        dict_class_holder[class_] = ary_dataset[ary_dataset[:, -1] == class_]
 
-    train_dataset = {}
-    array_training = np.empty_like(classes, dtype=object)
-    test_dataset = {}
-    array_test = np.empty_like(classes, dtype=object)
-    for fold in range(n_fold):
-        for class_ in classes:
-            grab = np.int(fold_size * counts_perc[class_])
-            array_test[class_] = classes_holder_dict[class_][fold * grab:(fold + 1) * grab ,:]
-            array_training[class_] = np.delete(
-                classes_holder_dict[class_],
-                (range(fold * grab, (fold + 1) * grab)),
+    if not stratify:
+        ary_classes = np.array([0])
+        ary_counts_perc[0] = 1
+        dict_class_holder[0] = ary_dataset
+
+    dict_train_dataset = {}
+    dict_test_dataset = {}
+    ary_training = np.empty_like(ary_classes, dtype=object)
+    ary_test = np.empty_like(ary_classes, dtype=object)
+    for fold in range(n_folds):
+        for class_ in ary_classes:
+            grab = np.int(fold_size * ary_counts_perc[class_])
+            from_ = fold * grab
+            to_ = (fold + 1) * grab
+
+            ary_test[class_] = dict_class_holder[class_][from_:to_ ,:]
+            ary_training[class_] = np.delete(
+                dict_class_holder[class_],
+                range(from_, to_),
                 axis=0
             )
-            
-        train_dataset[fold] = np.concatenate(array_training)
-        test_dataset[fold] = np.concatenate(array_test)
 
-    models = {}
-    results_dict_all_models = {}
+        dict_train_dataset[fold] = np.concatenate(ary_training)
+        dict_test_dataset[fold] = np.concatenate(ary_test)
 
-    grid_len= param_grid(kwargs['param_grid_dict'])
-    n_to_run = len(list(grid_len)) * n_fold
+    return dict_train_dataset, dict_test_dataset
 
-    grid = param_grid(kwargs['param_grid_dict'])
-    count = 1
-    for index_model, params in enumerate(grid):
-        models["model_" + str(index_model + 1)] = clf(**params)
 
-        results_dict = {}
-        for index_fold in range(n_fold):
-            if verbose:
-                print("\n*********{}/{}*********".format(count ,n_to_run))
-                print(
-                    "Running model {0} fold {1}".format(
-                    str(index_model + 1),
-                    str(index_fold + 1)
-                    )
-                )
+def cross_validate(
+    clf,
+    dict_params,
+    dict_train_dataset,
+    dict_test_dataset,
+    count=None,
+    n_to_run=None,
+    index_model=None
+):
+    model = clf(**dict_params)
 
-            x_train = train_dataset[fold][:, :-1].T
-            y_train = one_hot_encode(train_dataset[fold][:, -1]).T
-
-            x_test = test_dataset[fold][:, :-1].T
-            y_test = one_hot_encode(test_dataset[fold][:, -1]).T
-
-            models["model_" + str(index_model + 1)].fit(x_train, y_train)
-
-            results_dict["fold_" + str(index_fold + 1)] = \
-            calculate_model_performance(
-                np.argmax(y_test, axis=0),
-                models["model_" + str(index_model + 1)].predict(x_test)
-            )
+    n_folds = len(dict_train_dataset)
+    dict_results = {}
+    for index_fold in range(n_folds):
+        if count:
+            print("\n*********{0}/{1}*********".format(count, n_to_run))
+            prunt("Running model {0} fold {1}".format(
+                str(index_model + 1),
+                str(index_fold + 1)
+                ))
             count += 1
 
-        results_dict_all_models["model_" + str(index_model + 1)] = results_dict
-        results_average_dict = metrics_averaged_and_sorted(results_dict_all_models,
-                                                           metrics,
+        x_train = dict_train_dataset[index_fold][:, :-1].T
+        y_train = one_hot_encode(dict_train_dataset[index_fold][:, -1]).T
+
+        x_test = dict_test_dataset[index_fold][:, :-1].T
+        y_test = one_hot_encode(dict_test_dataset[index_fold][:, -1]).T
+
+        model.fit(x_train, y_train)
+
+        dict_results["fold_" + str(index_fold + 1)] = \
+        calculate_model_performance(
+            np.argmax(y_test, axis=0),
+            model.predict(x_test)
+        )
+
+    if count :
+        return model, dict_results, count
+    return model, dict_results
+
+
+def metrics_averaged_and_sorted(dict_model_metrics, lst_metrics, sort_by=None):
+    # by default sort by the first metric passed
+    if not sort_by:
+        sort_by = lst_metrics[0]
+
+    # if single metric is passed to lst_metrics e.g. "accuracy"
+    if not isinstance(lst_metrics, list):
+        index_sort = 1
+        lst_metrics = [lst_metrics]
+    else:
+        index_sort = lst_metrics.index(sort_by)
+
+    dict_results_average = {}
+    for metric in lst_metrics:
+        for model in dict_model_metrics:
+            retrieve_metric = {}
+            for fold in dict_model_metrics[model]:
+                retrieve_metric[model + "_" + fold] = dict_model_metrics[model][fold][metric]
+
+            vals = np.fromiter(retrieve_metric.values(), dtype=float)
+            try:
+                dict_results_average[model] = dict_results_average[model], (metric, np.average(vals))
+            except KeyError:
+                dict_results_average[model] = metric, np.average(vals)
+
+    return sorted(dict_results_average.items(), key=lambda x: x[1][index_sort], reverse=True)
+
+
+def grid_search(
+    x,
+    y,
+    clf,
+    lst_metrics,
+    shuffle=True,
+    stratify=True,
+    sort_by=None,
+    n_folds=3,
+    **kwargs
+):
+    # x and y are in the shape of (no_of_training_examples, no_of_features)
+
+    dict_train_dataset, dict_test_dataset = make_n_folds(
+        x,
+        y,
+        n_folds,
+        shuffle,
+        stratify
+    )
+
+    dict_models = {}
+    dict_results_all = {}
+
+    itobj_grid_len = param_grid(kwargs['dict_param_grid'])
+    n_to_run = len(list(itobj_grid_len)) * n_folds
+
+    itobj_grid = param_grid(kwargs['dict_param_grid'])
+    count = 1
+    for index_model, dict_params in enumerate(itobj_grid):
+        model, results_dict, count = cross_validate(
+            clf,
+            dict_params,
+            dict_train_dataset,
+            dict_test_dataset,
+            count,
+            n_to_run,
+            index_model,
+        )
+
+        dict_models["model_" + str(index_model + 1)] = model
+        dict_results_all["model_" + str(index_model + 1)] = results_dict
+        dict_results_average = metrics_averaged_and_sorted(dict_results_all,
+                                                           lst_metrics,
                                                            sort_by)
 
-    return results_dict_all_models, results_average_dict, models
+    return dict_results_all, dict_results_average, dict_models
 
 
 # **************************************** PLOTTING *******************************************************************
@@ -321,12 +378,12 @@ def plot_ROC(
     threshold_spacing=50,
 ):
     true_positive_rate, false_positive_rate = calculate_TP_FP(actual, func_to_predict, threshold_spacing)
-            
+
     #Here we multiply with -1 because recall is in decreasing order and therefore,
     #np.trapz returns a negative value. However, taking the integral of an equation
     #should return us the area under a curve which cannot be negative.
     AUC = -1 * np.trapz(y=true_positive_rate, x=false_positive_rate) 
-    
+
     fig, ax = plt.subplots(1, 1, figsize=(10, 7))
     ax.plot(false_positive_rate, true_positive_rate)
     ax.plot([0, 100], [0, 100])
