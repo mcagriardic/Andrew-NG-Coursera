@@ -2,9 +2,22 @@ import numpy as np
 from scipy.optimize import minimize
 import matplotlib.pyplot as plt
 from itertools import product
+from functools import wraps
+from time import time
 
 
 EPSILON = 10e-10 # to silence the RuntimeWarning: divide by zero encountered errors
+
+
+def timeit(f):
+    @wraps(f)
+    def wrap(*args, **kw):
+        ts = time()
+        result = f(*args, **kw)
+        te = time()
+        print('func:%r -- took: %2.4f sec' % (f.__name__, te-ts))
+        return result
+    return wrap
 
 
 def calculate_model_performance(actual, predicted):
@@ -180,7 +193,7 @@ def cross_validate(
     for index_fold in range(n_folds):
         if count:
             print("\n*********{0}/{1}*********".format(count, n_to_run))
-            prunt("Running model {0} fold {1}".format(
+            print("Running model {0} fold {1}".format(
                 str(index_model + 1),
                 str(index_fold + 1)
                 ))
