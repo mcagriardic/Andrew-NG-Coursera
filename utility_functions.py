@@ -103,29 +103,49 @@ def shuffled(X, y):
     return dataset[shuffled]
 
 
-def split_data_as(X, y, **kwargs):
+def split_data_as(X, y, shuffle=True, **kwargs):
     args_passed = list(kwargs.keys())
     split_ratios = kwargs.values()
     if not np.isclose(sum(split_ratios), 1):
         raise FractionError("Passed fractions add up to %.3f! The fractions should add up to 1!" %sum(split_ratios))
     print("Splitting the dataset as %s..." %(', '.join(args_passed[:-1]) + ' and ' + args_passed[-1]))
 
-    dataset_shuffled = shuffled(X, y)
+    if shuffle:
+        ary_dataset = shuffled(X, y)
+    else:
+        ary_dataset = np.c_[X,y]
 
-    if len(args_passed) == 3:
-        arg_1, arg_2, arg_3 = np.split(
-            dataset_shuffled,
-            [int(kwargs[args_passed[0]] * len(dataset_shuffled)),
-             int((kwargs[args_passed[0]] + kwargs[args_passed[1]]) * len(dataset_shuffled))]
-        )
-        return arg_1, arg_2, arg_3
+    ary_classes, ary_counts = np.unique(y, return_counts=True)
+    ary_classes = np.int_(ary_classes)
+    ary_counts_perc = ary_counts / y.shape[0]
 
-    elif len(args_passed) == 2:
-        arg_1, arg_2 = np.split(
-            dataset_shuffled,
-            [int(kwargs[args_passed[0]] * len(dataset_shuffled))]
-        )
-        return arg_1, arg_2
+    dict_class_data_holder = {}
+
+    for class_ in ary_classes:
+        dict_class_data_holder[class_] = ary_dataset[ary_dataset[:, -1] == class_]
+
+    dict_split_class_data_holder = {}
+
+    for ratio, key in zip(split_ratios, args_passed):
+        dict_split_class_data_holder[key] = {}
+        for class_ in ary_classes:
+            grab = np.int(np.ceil(ratio * ary_counts_perc[class_] * ary_dataset.shape[0]))
+
+            dict_split_class_data_holder[key][class_] = dict_class_data_holder[class_][0:grab,:]
+            dict_class_data_holder[class_] = np.delete(
+                dict_class_data_holder[class_],
+                range(0, grab),
+                axis=0
+            )
+
+    for key in dict_split_class_data_holder:
+        lst_temp_data_holder = []
+        for class_ in dict_split_class_data_holder[key]:
+            lst_temp_data_holder.append(dict_split_class_data_holder[key][class_])
+        dict_split_class_data_holder[key] = np.concatenate(lst_temp_data_holder)
+
+    data_splitted = tuple(dict_split_class_data_holder[key] for key in dict_split_class_data_holder)
+    return data_splitted
 
 
 def param_grid(dict_param_grid):
@@ -160,7 +180,7 @@ def make_n_folds(x, y, n_folds=3, shuffle=True, stratify=True):
     ary_test = np.empty_like(ary_classes, dtype=object)
     for fold in range(n_folds):
         for class_ in ary_classes:
-            grab = np.int(fold_size * ary_counts_perc[class_])
+            grab = np.int(np.ceil(fold_size * ary_counts_perc[class_]))
             from_ = fold * grab
             to_ = (fold + 1) * grab
 
@@ -409,3 +429,8 @@ def plot_ROC(
     ax.set_title("ROC Curve - AUC %.3f" %(AUC/100), fontsize=20) 
     ax.legend(["Logistic Regression", "Random guess"], loc='lower right', prop={'size': 14});
 # *********************************************************************************************************************
+
+
+
+
+
